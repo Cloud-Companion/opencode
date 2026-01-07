@@ -108,6 +108,17 @@ env:
 
 The precedence is: agent-specific > global default > hardcoded default (`opencode-agent[bot]`).
 
+### Branch Prefix Configuration
+
+Configure the prefix for branches created by OpenCode:
+
+```yaml
+env:
+  BRANCH_PREFIX: cc
+```
+
+By default, branches are created with the `opencode/` prefix (e.g., `opencode/issue123-20240101`). Setting `BRANCH_PREFIX` to `cc` would create branches like `cc/issue123-20240101` instead. This applies to all branches created by OpenCode, including issue branches, PR branches, scheduled branches, and worktrees.
+
 ### Manual Setup
 
 1. Install the GitHub app https://github.com/apps/opencode-agent. Make sure it is installed on the target repository.

@@ -1111,6 +1111,10 @@ export const GithubRunCommand = cmd({
         await $`git checkout -b ${localBranch} fork/${remoteBranch}`
       }
 
+      function useBranchPrefix() {
+        return process.env["BRANCH_PREFIX"] || "opencode"
+      }
+
       function generateBranchName(type: "issue" | "pr" | "schedule" | "dispatch") {
         const timestamp = new Date()
           .toISOString()
@@ -1120,9 +1124,9 @@ export const GithubRunCommand = cmd({
           .join("")
         if (type === "schedule" || type === "dispatch") {
           const hex = crypto.randomUUID().slice(0, 6)
-          return `opencode/${type}-${hex}-${timestamp}`
+          return `${useBranchPrefix()}/${type}-${hex}-${timestamp}`
         }
-        return `opencode/${type}${issueId}-${timestamp}`
+        return `${useBranchPrefix()}/${type}${issueId}-${timestamp}`
       }
 
       async function pushToNewBranch(summary: string, branch: string, commit: boolean, isSchedule: boolean) {

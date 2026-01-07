@@ -160,10 +160,14 @@ export namespace Worktree {
     return [outputText(result.stderr), outputText(result.stdout)].filter(Boolean).join("\n")
   }
 
+  function useBranchPrefix() {
+    return process.env["BRANCH_PREFIX"] || "opencode"
+  }
+
   async function candidate(root: string, base?: string) {
     for (const attempt of Array.from({ length: 26 }, (_, i) => i)) {
       const name = base ? (attempt === 0 ? base : `${base}-${randomName()}`) : randomName()
-      const branch = `opencode/${name}`
+      const branch = `${useBranchPrefix()}/${name}`
       const directory = path.join(root, name)
 
       if (await exists(directory)) continue

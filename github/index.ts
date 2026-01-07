@@ -405,6 +405,10 @@ function useEnvCommand() {
   return value.split(",").map((cmd) => cmd.trim())
 }
 
+function useBranchPrefix() {
+  return process.env["BRANCH_PREFIX"] || "opencode"
+}
+
 function useEnvGitAuthor(agentName?: string): { name: string; email: string } {
   // Check agent-specific env vars first: GIT_AUTHOR_NAME_<AGENT>, GIT_AUTHOR_EMAIL_<AGENT>
   if (agentName) {
@@ -816,7 +820,7 @@ function generateBranchName(type: "issue" | "pr") {
     .replace(/\.\d{3}Z/, "")
     .split("T")
     .join("")
-  return `opencode/${type}${useIssueId()}-${timestamp}`
+  return `${useBranchPrefix()}/${type}${useIssueId()}-${timestamp}`
 }
 
 async function pushToNewBranch(summary: string, branch: string) {
