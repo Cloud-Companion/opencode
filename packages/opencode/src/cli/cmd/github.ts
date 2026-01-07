@@ -719,11 +719,10 @@ export const GithubRunCommand = cmd({
 
       async function getUserPrompt() {
         const customPrompt = process.env["PROMPT"]
-        // For repo events and issues events, PROMPT is required since there's no comment to extract from
-        if (isRepoEvent || isIssuesEvent) {
+        // For repo events, PROMPT is required since there's no issue/comment to extract from
+        if (isRepoEvent) {
           if (!customPrompt) {
-            const eventType = isRepoEvent ? "scheduled and workflow_dispatch" : "issues"
-            throw new Error(`PROMPT input is required for ${eventType} events`)
+            throw new Error(`PROMPT input is required for scheduled and workflow_dispatch events`)
           }
           return { userPrompt: customPrompt, promptFiles: [] }
         }
@@ -733,28 +732,85 @@ export const GithubRunCommand = cmd({
         }
 
         const reviewContext = getReviewCommentContext()
-        const mentions = (process.env["MENTIONS"] || "/opencode,/oc")
+        // Support both COMMAND (new) and MENTIONS (legacy) env vars
+        const mentions = (process.env["COMMAND"] || process.env["MENTIONS"] || "/opencode,/oc")
           .split(",")
           .map((m) => m.trim().toLowerCase())
           .filter(Boolean)
+        
+        // Helper function to check if body contains any mention
+        const checkMentions = (body: string): boolean => {
+          const bodyLower = body.toLowerCase()
+          
+          // Check for exact match first
+          if (mentions.some((m) => bodyLower === m)) {
+            return true
+          }
+          
+          // Check if body includes any mention (with word boundary awareness)
+          // Match if mention appears at start, after whitespace, or as standalone
+          const mentionPattern = mentions.map((m) => {
+            // Escape special regex characters in the mention
+            const escaped = m.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+            // Match at start of string, after whitespace, or at word boundary
+            return `(?:^|\\s)${escaped}(?:$|\\s|@)`
+          }).join("|")
+          const regex = new RegExp(mentionPattern, "i")
+          
+          return regex.test(body)
+        }
+        
         let prompt = (() => {
+          // Handle issues event - extract from issue body
+          if (isIssuesEvent) {
+            const issuePayload = payload as IssuesEvent
+            const body = (issuePayload.issue.body || "").trim()
+            
+            if (!checkMentions(body)) {
+              throw new Error(`Issue body must mention ${mentions.map((m) => "`" + m + "`").join(" or ")}`)
+            }
+            
+            // Remove the command from the body
+            let promptText = body
+            for (const mention of mentions) {
+              // Remove exact match
+              if (promptText.toLowerCase() === mention) {
+                promptText = ""
+                break
+              }
+              // Remove mention at start or after whitespace
+              const escaped = mention.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+              const regex = new RegExp(`(?:^|\\s)${escaped}(?:$|\\s|@)`, "i")
+              promptText = promptText.replace(regex, "").trim()
+            }
+            
+            return promptText || "Summarize this issue"
+          }
+          
+          // Handle comment events
           if (!isCommentEvent) {
             return "Review this pull request"
           }
+          
           const body = (payload as IssueCommentEvent | PullRequestReviewCommentEvent).comment.body.trim()
           const bodyLower = body.toLowerCase()
+          
+          // Check for exact match first
           if (mentions.some((m) => bodyLower === m)) {
             if (reviewContext) {
               return `Review this code change and suggest improvements for the commented lines:\n\nFile: ${reviewContext.file}\nLines: ${reviewContext.line}\n\n${reviewContext.diffHunk}`
             }
             return "Summarize this thread"
           }
-          if (mentions.some((m) => bodyLower.includes(m))) {
+          
+          // Check if body includes any mention
+          if (checkMentions(body)) {
             if (reviewContext) {
               return `${body}\n\nContext: You are reviewing a comment on file "${reviewContext.file}" at line ${reviewContext.line}.\n\nDiff context:\n${reviewContext.diffHunk}`
             }
             return body
           }
+          
           throw new Error(`Comments must mention ${mentions.map((m) => "`" + m + "`").join(" or ")}`)
         })()
 
