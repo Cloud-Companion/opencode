@@ -397,6 +397,17 @@ jobs:
 
       - name: Run opencode
         uses: anomalyco/opencode/github@latest${envStr}
+        env:
+          # Optional: Configure custom wake-up command (default: /opencode,/oc)
+          # COMMAND: /cc
+          # Optional: Default agent if not mentioned in comment (e.g., /cc@plan)
+          # AGENT: build
+          # Optional: Global git commit author defaults
+          # GIT_AUTHOR_NAME: "OpenCode Bot"
+          # GIT_AUTHOR_EMAIL: "opencode@company.com"
+          # Optional: Agent-specific git commit author (e.g., for plan agent)
+          # GIT_AUTHOR_NAME_PLAN: "Plan Agent"
+          # GIT_AUTHOR_EMAIL_PLAN: "plan@company.com"
         with:
           model: ${provider}/${model}`,
             )

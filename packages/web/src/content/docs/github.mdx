@@ -86,6 +86,25 @@ Or you can set it up manually.
 - `prompt`: Optional custom prompt to override the default behavior. Use this to customize how OpenCode processes requests.
 - `token`: Optional GitHub access token for performing operations such as creating comments, committing changes, and opening pull requests. By default, OpenCode uses the installation access token from the OpenCode GitHub App, so commits, comments, and pull requests appear as coming from the app.
 
+### Environment Variables
+
+- `COMMAND`: Comma-separated list of trigger commands (default: `/opencode,/oc`). Example: `COMMAND: /cc`
+- `AGENT`: Default agent to use if not mentioned in comment. Example: `AGENT: plan`
+- `GIT_AUTHOR_NAME`: Global default git commit author name
+- `GIT_AUTHOR_EMAIL`: Global default git commit author email
+- `GIT_AUTHOR_NAME_<AGENT>`: Agent-specific git commit author name (e.g., `GIT_AUTHOR_NAME_PLAN`)
+- `GIT_AUTHOR_EMAIL_<AGENT>`: Agent-specific git commit author email (e.g., `GIT_AUTHOR_EMAIL_PLAN`)
+
+### Agent Mentions
+
+You can invoke specific agents directly from comments using the `@agent` syntax:
+
+- `/cc@plan review this PR` - Uses the plan agent
+- `/cc@build implement feature` - Uses the build agent  
+- `/cc@general search for function` - Uses the general subagent
+
+If no agent is mentioned, the default agent (from `AGENT` env var or config) will be used.
+
   Alternatively, you can use the GitHub Action runner's [built-in `GITHUB_TOKEN`](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token) without installing the OpenCode GitHub App. Just make sure to grant the required permissions in your workflow:
 
   ```yaml

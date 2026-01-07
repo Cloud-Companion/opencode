@@ -58,6 +58,56 @@ opencode github install
 
 This will walk you through installing the GitHub app, creating the workflow, and setting up secrets.
 
+## Configuration
+
+### Custom Wake-Up Command
+
+You can configure a custom command to trigger OpenCode instead of the default `/opencode` or `/oc`. Set the `COMMAND` environment variable in your workflow:
+
+```yaml
+env:
+  COMMAND: /cc
+```
+
+You can also specify multiple commands (comma-separated):
+
+```yaml
+env:
+  COMMAND: /cc,/review
+```
+
+### Agent Mentions
+
+You can invoke specific agents directly from comments using the `@agent` syntax:
+
+- `/cc@plan review this PR` - Uses the plan agent
+- `/cc@build implement feature` - Uses the build agent
+- `/cc@general search for function` - Uses the general subagent
+
+If no agent is mentioned, the default agent (from `AGENT` env var or config) will be used.
+
+### Git Commit Author Configuration
+
+Configure git commit author information per agent or globally:
+
+**Global defaults:**
+```yaml
+env:
+  GIT_AUTHOR_NAME: "OpenCode Bot"
+  GIT_AUTHOR_EMAIL: "opencode@company.com"
+```
+
+**Agent-specific (takes precedence over global):**
+```yaml
+env:
+  GIT_AUTHOR_NAME_PLAN: "Plan Agent"
+  GIT_AUTHOR_EMAIL_PLAN: "plan@company.com"
+  GIT_AUTHOR_NAME_BUILD: "Build Agent"
+  GIT_AUTHOR_EMAIL_BUILD: "build@company.com"
+```
+
+The precedence is: agent-specific > global default > hardcoded default (`opencode-agent[bot]`).
+
 ### Manual Setup
 
 1. Install the GitHub app https://github.com/apps/opencode-agent. Make sure it is installed on the target repository.

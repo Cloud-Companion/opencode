@@ -121,6 +121,7 @@ let gitConfig: string
 let session: { id: string; title: string; version: string }
 let shareId: string | undefined
 let exitCode = 0
+let resolvedAgentName: string | undefined
 type PromptFiles = Awaited<ReturnType<typeof getUserPrompt>>["promptFiles"]
 
 try {
@@ -134,7 +135,8 @@ try {
     headers: { authorization: `token ${accessToken}` },
   })
 
-  const { userPrompt, promptFiles } = await getUserPrompt()
+  const { userPrompt, promptFiles, mentionedAgent } = await getUserPrompt()
+  resolvedAgentName = await resolveAgent(mentionedAgent || undefined)
   await configureGit(accessToken)
   await assertPermissions()
 
@@ -243,8 +245,64 @@ function createOpencode() {
 function assertPayloadKeyword() {
   const payload = useContext().payload as IssueCommentEvent | PullRequestReviewCommentEvent
   const body = payload.comment.body.trim()
-  if (!body.match(/(?:^|\s)(?:\/opencode|\/oc)(?=$|\s)/)) {
-    throw new Error("Comments must mention `/opencode` or `/oc`")
+  const commands = useEnvCommand()
+  
+  // Build regex pattern from commands (escape special regex characters)
+  const commandPattern = commands.map((cmd) => cmd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+  const regex = new RegExp(`(?:^|\\s)(?:${commandPattern})(?=$|\\s|@)`)
+  
+  if (!body.match(regex)) {
+    const commandList = commands.join("`, `")
+    throw new Error(`Comments must mention \`${commandList}\``)
+  }
+}
+
+function parseCommandAndAgent(body: string, commands: string[]): {
+  command: string | null
+  agent: string | null
+  prompt: string
+} {
+  const trimmedBody = body.trim()
+  
+  // Check if body matches any command exactly or starts with a command
+  const exactMatch = commands.find((cmd) => trimmedBody === cmd || trimmedBody.startsWith(cmd))
+  if (!exactMatch) {
+    // Check if body includes any command
+    const includesMatch = commands.find((cmd) => trimmedBody.includes(cmd))
+    if (!includesMatch) {
+      const commandList = commands.join("`, `")
+      throw new Error(`Comments must mention \`${commandList}\``)
+    }
+  }
+  
+  // Extract agent mention (e.g., /cc@plan or /cc@general)
+  // Pattern: command@agentname (where agentname is alphanumeric, hyphens, underscores)
+  const agentMatch = trimmedBody.match(/@([a-zA-Z0-9_-]+)/)
+  const mentionedAgent: string | null = agentMatch && agentMatch[1] ? agentMatch[1] : null
+  
+  // Remove agent mention from body for prompt processing
+  let prompt = trimmedBody
+  if (agentMatch) {
+    // Remove the @agent part, but keep the rest
+    prompt = trimmedBody.replace(/@[a-zA-Z0-9_-]+\s*/, "").trim()
+  }
+  
+  // Remove the command itself from the prompt
+  for (const cmd of commands) {
+    if (prompt === cmd) {
+      prompt = ""
+      break
+    }
+    if (prompt.startsWith(cmd)) {
+      prompt = prompt.slice(cmd.length).trim()
+      break
+    }
+  }
+  
+  return {
+    command: exactMatch || commands.find((cmd) => trimmedBody.includes(cmd)) || null,
+    agent: mentionedAgent,
+    prompt: prompt,
   }
 }
 
@@ -341,6 +399,41 @@ function useEnvGithubToken() {
   return process.env["TOKEN"]
 }
 
+function useEnvCommand() {
+  const value = process.env["COMMAND"]
+  if (!value) return ["/opencode", "/oc"] // backward compatible default
+  return value.split(",").map((cmd) => cmd.trim())
+}
+
+function useEnvGitAuthor(agentName?: string): { name: string; email: string } {
+  // Check agent-specific env vars first: GIT_AUTHOR_NAME_<AGENT>, GIT_AUTHOR_EMAIL_<AGENT>
+  if (agentName) {
+    const agentUpper = agentName.toUpperCase()
+    const agentNameKey = `GIT_AUTHOR_NAME_${agentUpper}`
+    const agentEmailKey = `GIT_AUTHOR_EMAIL_${agentUpper}`
+    const agentNameValue = process.env[agentNameKey]
+    const agentEmailValue = process.env[agentEmailKey]
+    
+    if (agentNameValue && agentEmailValue) {
+      return { name: agentNameValue, email: agentEmailValue }
+    }
+  }
+  
+  // Fall back to global: GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL
+  const globalName = process.env["GIT_AUTHOR_NAME"]
+  const globalEmail = process.env["GIT_AUTHOR_EMAIL"]
+  
+  if (globalName && globalEmail) {
+    return { name: globalName, email: globalEmail }
+  }
+  
+  // Final fallback to hardcoded default
+  return {
+    name: "opencode-agent[bot]",
+    email: "opencode-agent[bot]@users.noreply.github.com",
+  }
+}
+
 function isMock() {
   const { mockEvent, mockToken } = useEnvMock()
   return Boolean(mockEvent || mockToken)
@@ -414,22 +507,25 @@ async function getUserPrompt() {
   const context = useContext()
   const payload = context.payload as IssueCommentEvent | PullRequestReviewCommentEvent
   const reviewContext = getReviewCommentContext()
+  const commands = useEnvCommand()
+
+  const { command, agent, prompt: parsedPrompt } = parseCommandAndAgent(payload.comment.body.trim(), commands)
 
   let prompt = (() => {
-    const body = payload.comment.body.trim()
-    if (body === "/opencode" || body === "/oc") {
+    // If prompt is empty (just the command), provide default behavior
+    if (!parsedPrompt || parsedPrompt.length === 0) {
       if (reviewContext) {
         return `Review this code change and suggest improvements for the commented lines:\n\nFile: ${reviewContext.file}\nLines: ${reviewContext.line}\n\n${reviewContext.diffHunk}`
       }
       return "Summarize this thread"
     }
-    if (body.includes("/opencode") || body.includes("/oc")) {
-      if (reviewContext) {
-        return `${body}\n\nContext: You are reviewing a comment on file "${reviewContext.file}" at line ${reviewContext.line}.\n\nDiff context:\n${reviewContext.diffHunk}`
-      }
-      return body
+    
+    // If there's a review context, add it to the prompt
+    if (reviewContext) {
+      return `${parsedPrompt}\n\nContext: You are reviewing a comment on file "${reviewContext.file}" at line ${reviewContext.line}.\n\nDiff context:\n${reviewContext.diffHunk}`
     }
-    throw new Error("Comments must mention `/opencode` or `/oc`")
+    
+    return parsedPrompt
   })()
 
   // Handle images
@@ -487,7 +583,7 @@ async function getUserPrompt() {
       replacement,
     })
   }
-  return { userPrompt: prompt, promptFiles: imgData }
+  return { userPrompt: prompt, promptFiles: imgData, mentionedAgent: agent }
 }
 
 async function subscribeSessionEvents() {
@@ -585,31 +681,38 @@ async function summarize(response: string) {
   }
 }
 
-async function resolveAgent(): Promise<string | undefined> {
-  const envAgent = useEnvAgent()
-  if (!envAgent) return undefined
+async function resolveAgent(mentionedAgent?: string): Promise<string | undefined> {
+  // If agent mentioned in command, use it (validate it exists)
+  const agentToResolve = mentionedAgent || useEnvAgent()
+  if (!agentToResolve) return undefined
 
-  // Validate the agent exists and is a primary agent
+  // Validate the agent exists (supports both primary and subagents)
   const agents = await client.agent.list<true>()
-  const agent = agents.data?.find((a) => a.name === envAgent)
+  const agent = agents.data?.find((a) => a.name === agentToResolve)
 
   if (!agent) {
-    console.warn(`agent "${envAgent}" not found. Falling back to default agent`)
+    if (mentionedAgent) {
+      console.warn(`agent "${mentionedAgent}" mentioned in command not found. Falling back to default agent`)
+    } else {
+      console.warn(`agent "${agentToResolve}" not found. Falling back to default agent`)
+    }
     return undefined
   }
 
-  if (agent.mode === "subagent") {
-    console.warn(`agent "${envAgent}" is a subagent, not a primary agent. Falling back to default agent`)
+  // Note: We allow both primary and subagents when mentioned explicitly
+  // If no agent mentioned, we still prefer primary agents from env var
+  if (!mentionedAgent && agent.mode === "subagent") {
+    console.warn(`agent "${agentToResolve}" is a subagent, not a primary agent. Falling back to default agent`)
     return undefined
   }
 
-  return envAgent
+  return agentToResolve
 }
 
 async function chat(text: string, files: PromptFiles = []) {
   console.log("Sending message to opencode...")
   const { providerID, modelID } = useEnvModel()
-  const agent = await resolveAgent()
+  const agent = resolvedAgentName
 
   const chat = await client.session.chat<true>({
     path: session,
@@ -663,8 +766,11 @@ async function configureGit(appToken: string) {
 
   await $`git config --local --unset-all ${config}`
   await $`git config --local ${config} "AUTHORIZATION: basic ${newCredentials}"`
-  await $`git config --global user.name "opencode-agent[bot]"`
-  await $`git config --global user.email "opencode-agent[bot]@users.noreply.github.com"`
+  
+  // Get agent-specific git author config
+  const gitAuthor = useEnvGitAuthor(resolvedAgentName)
+  await $`git config --global user.name "${gitAuthor.name}"`
+  await $`git config --global user.email "${gitAuthor.email}"`
 }
 
 async function restoreGitConfig() {
@@ -716,9 +822,10 @@ function generateBranchName(type: "issue" | "pr") {
 async function pushToNewBranch(summary: string, branch: string) {
   console.log("Pushing to new branch...")
   const actor = useContext().actor
+  const gitAuthor = useEnvGitAuthor(resolvedAgentName)
 
   await $`git add .`
-  await $`git commit -m "${summary}
+  await $`git commit --author="${gitAuthor.name} <${gitAuthor.email}>" -m "${summary}
 
 Co-authored-by: ${actor} <${actor}@users.noreply.github.com>"`
   await $`git push -u origin ${branch}`
@@ -727,9 +834,10 @@ Co-authored-by: ${actor} <${actor}@users.noreply.github.com>"`
 async function pushToLocalBranch(summary: string) {
   console.log("Pushing to local branch...")
   const actor = useContext().actor
+  const gitAuthor = useEnvGitAuthor(resolvedAgentName)
 
   await $`git add .`
-  await $`git commit -m "${summary}
+  await $`git commit --author="${gitAuthor.name} <${gitAuthor.email}>" -m "${summary}
 
 Co-authored-by: ${actor} <${actor}@users.noreply.github.com>"`
   await $`git push`
@@ -738,11 +846,12 @@ Co-authored-by: ${actor} <${actor}@users.noreply.github.com>"`
 async function pushToForkBranch(summary: string, pr: GitHubPullRequest) {
   console.log("Pushing to fork branch...")
   const actor = useContext().actor
+  const gitAuthor = useEnvGitAuthor(resolvedAgentName)
 
   const remoteBranch = pr.headRefName
 
   await $`git add .`
-  await $`git commit -m "${summary}
+  await $`git commit --author="${gitAuthor.name} <${gitAuthor.email}>" -m "${summary}
 
 Co-authored-by: ${actor} <${actor}@users.noreply.github.com>"`
   await $`git push fork HEAD:${remoteBranch}`
